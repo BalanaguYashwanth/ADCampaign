@@ -1,28 +1,30 @@
-#[allow(lint(self_transfer))]
-/// Module: compaign_fund
+//todo - 
+//clicks will be in web2 or web3 doubt, because we need to update everytime and sometimes it may not sync with amount, becuase if affiliators drawn the amount then clicks needs to update
+
 module compaign_fund::compaign_fund {
 
     use sui::transfer;
     use sui::sui::SUI;
     use sui::coin::{Self, Coin};
     use sui::object::{Self, UID, ID};
-    use sui::balance::{Balance};
+    use sui::balance::{Self, Balance};
     use sui::tx_context::{Self, TxContext};
+     use std::debug;
     use std::string::{Self, String};
 
-    // const ENotEnough: u64 = 0;
+    const ENotEnough: u64 = 0;
 
     struct FundOwner has key {
         id: UID,
         fund_id: ID,
     }
 
-    struct Fund has store, key {
+    struct Fund has key {
         id: UID,
         company_name: String,
         total_clicks: u64,
-        amount_per_click: u64,
-        amount: Balance<SUI>, //Balance<SUI> or Coin<SUI> both are same representation is different and Balanace is more efficient and less gas fee than Coin
+        cost_per_click: u64,
+        amount: Balance<SUI>,
     }
 
     struct Reciept has key {
@@ -31,25 +33,29 @@ module compaign_fund::compaign_fund {
         amount: u64,
     }
 
-    //todo - add one more argument - amount to invest to work
-    public entry fun create_campaign(company_name: vector<u8>, amount_per_click: u64, sui_coin_id: Coin<SUI>, ctx: &mut TxContext){
-        //todo - split this number of sui_coin_id and 
+    //here coins and cost_per_click will be unit of (number)*10^9
+    public entry fun create_campaign(company_name: vector<u8>, coins: u64, coin_address: &mut Coin<SUI>, cost_per_click: u64, ctx: &mut TxContext){
         let fund_uid = object::new(ctx);
         let id = object::uid_to_inner(&fund_uid);
-        let sui_coins_value = coin::value(&sui_coin_id);
-        let sui_coins = coin::into_balance(sui_coin_id);
-        let total_clicks = 1000;
+        let total_coins_balanace = coin::balance_mut(coin_address);
+
+        assert!(coins >= 500_000_000, ENotEnough);
         
-        // assert!(sui_coins_value >= 5000000000u64, ENotEnough);
+        let pay = balance::split(total_coins_balanace, coins);
+
+        assert!(coins >= cost_per_click, ENotEnough); 
+
+        let total_clicks = coins / cost_per_click;
+        
+        debug::print(&total_clicks);
         
         let fundObject = Fund{
             id: fund_uid,
             company_name: string::utf8(company_name),
-            total_clicks: total_clicks,
-            amount_per_click: amount_per_click,
-            amount: sui_coins,
+            amount:  pay,
+            cost_per_click: cost_per_click,
+            total_clicks,
         };
-
 
         let fundOnwer = FundOwner{
             id: object::new(ctx),
@@ -59,10 +65,10 @@ module compaign_fund::compaign_fund {
         let reciept = Reciept{
             id: object::new(ctx),
             company_name: string::utf8(company_name),
-            amount: sui_coins_value
+            amount: coins
         };
 
-        transfer::share_object(fundObject);
+        transfer::transfer(fundObject, tx_context::sender(ctx));
         transfer::transfer(fundOnwer, tx_context::sender(ctx));
         transfer::transfer(reciept, tx_context::sender(ctx));
     }
@@ -73,5 +79,3 @@ module compaign_fund::compaign_fund {
     }
 
 }
-
-
