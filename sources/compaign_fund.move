@@ -1,7 +1,18 @@
 //todo - 
 //clicks will be in web2 or web3 doubt, because we need to update everytime and sometimes it may not sync with amount, becuase if affiliators drawn the amount then clicks needs to update
+// update minimum to start range fn
+// affiliators with partners section
+// add clicks counter
 
-module compaign_fund::compaign_fund {
+//asset ownership
+//transferrability
+//dynamic objects
+
+//todo - take care of security side and contract audit
+
+//status => Scheduled - 1, Started - 2, End / Expired - 3,
+
+module campaign_fund::campaign_fund {
 
     use sui::transfer;
     use sui::sui::SUI;
@@ -9,55 +20,99 @@ module compaign_fund::compaign_fund {
     use sui::object::{Self, UID, ID};
     use sui::balance::{Self, Balance};
     use sui::tx_context::{Self, TxContext};
-     use std::debug;
+    use sui::dynamic_object_field as ofield;
     use std::string::{Self, String};
 
     const ENotEnough: u64 = 0;
+    const SettlementAmount: u64= 5*10^8;
+    const PlatformFees: u64 = 1 * 10^9;
 
-    struct FundOwner has key {
+    struct CampaignOwner has key {
         id: UID,
         fund_id: ID,
     }
 
-    struct Fund has key {
+    struct Campaign has key {
         id: UID,
+        name: String,
         company_name: String,
         total_clicks: u64,
         cost_per_click: u64,
-        amount: Balance<SUI>,
+        budget: u64,
+        distribute_funds: Balance<SUI>,
+        wallet_address: address,
+        fees_wallet_address: address,
+        status: u64,
+        start_date: u64,
+        end_date: u64,
+        timestamp: u64,
+    }
+
+    //why store - dynamic filed b/w parent
+    struct Affiliate has key, store{
+        id: UID,
+        click_counts: u64,
+        earnings: u64,
+        wallet_address: address,
+    }
+
+    struct AffiliateProfile has key{
+        id: UID,
+        participated_campagins_count: u64,
+        total_clicks: u64,
+        total_earnings: u64,
     }
 
     struct Reciept has key {
         id: UID,
         company_name: String,
-        amount: u64,
+        campaign_name: String,
+        campaign_budget: u64,
+        timestamp: u64,
     }
 
-    //here coins and cost_per_click will be unit of (number)*10^9
-    public entry fun create_campaign(company_name: vector<u8>, coins: u64, coin_address: &mut Coin<SUI>, cost_per_click: u64, ctx: &mut TxContext){
+    //todo - keep transfer instead of public transfer, check transfer more details
+    public fun collect_fees(coin_address: &mut Coin<SUI>, fees_wallet_address: address, ctx: &mut TxContext){
+        let coin_balance = coin::balance_mut(coin_address);
+        let amount = coin::take(coin_balance, PlatformFees, ctx);
+        transfer::public_transfer(amount, fees_wallet_address)
+    }
+
+    // coins and cost_per_click will be unit of (number)*10^9
+    // start date & end date will be epoch
+    public entry fun create_campaign(campaign_name: vector<u8>,company_name: vector<u8> ,coin_address: &mut Coin<SUI>, coins: u64, cost_per_click: u64, start_date: u64, end_date: u64, wallet_address: address, fees_wallet_address: address ,ctx: &mut TxContext){
         let fund_uid = object::new(ctx);
         let id = object::uid_to_inner(&fund_uid);
-        let total_coins_balanace = coin::balance_mut(coin_address);
+        let coin_balance = coin::balance_mut(coin_address);
 
+        //todo - keep these below condition and division if possible in seperate module
         assert!(coins >= 500_000_000, ENotEnough);
         
-        let pay = balance::split(total_coins_balanace, coins);
+        let pay = balance::split(coin_balance, coins);
 
         assert!(coins >= cost_per_click, ENotEnough); 
 
         let total_clicks = coins / cost_per_click;
+
+        collect_fees(coin_address, fees_wallet_address, ctx);
         
-        debug::print(&total_clicks);
-        
-        let fundObject = Fund{
+        let fundObject = Campaign{
             id: fund_uid,
+            name: string::utf8(campaign_name),
             company_name: string::utf8(company_name),
-            amount:  pay,
             cost_per_click: cost_per_click,
+            budget : coins,
+            distribute_funds:  pay,
             total_clicks,
+            start_date,
+            end_date,
+            status: 2,
+            wallet_address,
+            fees_wallet_address,
+            timestamp:  tx_context::epoch(ctx),
         };
 
-        let fundOnwer = FundOwner{
+        let fundOnwer = CampaignOwner{
             id: object::new(ctx),
             fund_id: id
         };
@@ -65,7 +120,9 @@ module compaign_fund::compaign_fund {
         let reciept = Reciept{
             id: object::new(ctx),
             company_name: string::utf8(company_name),
-            amount: coins
+            campaign_name: string::utf8(campaign_name),
+            campaign_budget: coins,
+            timestamp:  tx_context::epoch(ctx),
         };
 
         transfer::transfer(fundObject, tx_context::sender(ctx));
@@ -73,9 +130,70 @@ module compaign_fund::compaign_fund {
         transfer::transfer(reciept, tx_context::sender(ctx));
     }
 
-    public entry fun withdraw_amount(fund: &mut Fund, amount_req: u64, ctx: &mut TxContext,) {
-        let amount = coin::take(&mut fund.amount, amount_req, ctx);
-        transfer::public_transfer(amount, tx_context::sender(ctx));
+    //todo - here earning will be an number will increment according to the click_counts and initially both 0 and based on the increment fn these update
+    // after that when withdraw loop they will pass into it
+    public entry fun create_affiliate(click_counts: u64, earnings: u64, wallet_address: address, ctx: &mut TxContext){
+        let affiliatesObject = Affiliate{
+            id: object::new(ctx),
+            click_counts,
+            earnings,
+            wallet_address: wallet_address,
+        };
+        transfer::transfer(affiliatesObject, tx_context::sender(ctx));
+    }
+
+    //todo -  whenever user connected wallet - check in web2 db - whether details there or not, if not then trigger these.
+    //todo - during web2 signup or in db - check whether it has affiliate profile address, if not then call this function
+    public fun create_affiliate_profile(ctx: &mut TxContext){
+        let profileObj = AffiliateProfile{
+            id: object::new(ctx),
+            participated_campagins_count:1,
+            total_clicks:0,
+            total_earnings:0,
+        };
+        transfer::transfer(profileObj, tx_context::sender(ctx));
+    }
+
+    public fun increment_affiliate_participate_count(profile: &mut AffiliateProfile){
+        profile.participated_campagins_count = profile.participated_campagins_count + 1;
+    }
+
+    // restrict it - no one should not use it
+    public fun add_affiliate_to_campaign(fund: &mut Campaign, affiliate: Affiliate){
+        //todo - need to check whether company has campaignFund or not 
+        assert!(fund.wallet_address != affiliate.wallet_address, ENotEnough);
+        let affiliate_id = object::id(&affiliate);
+        ofield::add(&mut fund.id, affiliate_id, affiliate)
+    }
+
+    //todo - convert into private
+    //todo - get affiliate via parent instead of affiliate directly
+    public fun click_counter(fund: &mut Campaign, affiliate: &mut Affiliate, profile :&mut AffiliateProfile, ctx: &mut TxContext){
+        affiliate.click_counts =  affiliate.click_counts + 1;
+        affiliate.earnings =  affiliate.earnings + SettlementAmount;
+        increment_affiliate_profile_count(profile);
+        withdraw_amount(fund, SettlementAmount, affiliate.wallet_address, ctx)
+    }
+
+    public fun increment_affiliate_profile_count(profile: &mut AffiliateProfile){
+        profile.total_clicks = profile.total_clicks + 1;
+        profile.total_earnings  = profile.total_earnings + SettlementAmount;
+    }
+
+    //todo - check end campaign
+    public fun end_campaign(campaign: &mut Campaign, ctx: &mut TxContext ){
+        campaign.status = 3;
+        let total_balance = balance::value(&campaign.distribute_funds);
+        //todo - change value
+        let amount = coin::take(&mut campaign.distribute_funds, total_balance, ctx);
+        transfer::public_transfer(amount, campaign.wallet_address);
+    }
+
+    //todo - convert into private
+    // restrict it - no one should not use it
+    public fun withdraw_amount(campaign: &mut Campaign, amount_req: u64, reciept_address: address ,ctx: &mut TxContext) {
+        let amount = coin::take(&mut campaign.distribute_funds, amount_req, ctx);
+        transfer::public_transfer(amount, reciept_address);
     }
 
 }
