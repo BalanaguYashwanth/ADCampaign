@@ -24,7 +24,6 @@ module campaign_fund::campaign_fund {
     use sui::tx_context::{Self, TxContext};
     use sui::dynamic_object_field as ofield;
     use std::string::{Self, String};
-    use std::debug;
 
     const ENotEnough: u64 = 0;
     
@@ -213,22 +212,14 @@ module campaign_fund::campaign_fund {
         ofield::add(&mut fund.id, affiliate_id, affiliate)
     }
 
-    fun mutate_affiliate_child(affiliate: &mut Affiliate): address{
-        affiliate.click_counts =  affiliate.click_counts + 1;
-        affiliate.wallet_address
-        // affiliate.earnings =  affiliate.earnings + campaign.cost_per_click;
-    }
     //todo - convert into private
     //todo - get affiliate via parent instead of affiliate directly
-    public fun click_counter(campaign: &mut Campaign, affiliate_link_id: address, profile :&mut AffiliateProfile, ctx: &mut TxContext){
-        let wallet_address = mutate_affiliate_child(ofield::borrow_mut(
-            &mut campaign.id,
-            affiliate_link_id
-        ));
-        debug::print(&wallet_address);
+    public fun click_counter(campaign: &mut Campaign, affiliate: &mut Affiliate, profile :&mut AffiliateProfile, ctx: &mut TxContext){
+        affiliate.click_counts =  affiliate.click_counts + 1;
+        affiliate.earnings =  affiliate.earnings + campaign.cost_per_click;
         let cpc = campaign.cost_per_click;
         increment_affiliate_profile_count(campaign, profile);
-        withdraw_amount(campaign, cpc, wallet_address, ctx)
+        withdraw_amount(campaign, cpc, affiliate.wallet_address, ctx)
     }
 
     public fun increment_affiliate_profile_count(campaign: &mut Campaign, profile: &mut AffiliateProfile){
