@@ -18,12 +18,14 @@ module campaign_fund::campaign_fund {
 
     use sui::transfer;
     use sui::sui::SUI;
+    use sui::bag::{Bag, Self};
     use sui::coin::{Self, Coin};
+    use std::string::{Self, String};
     use sui::object::{Self, UID, ID};
     use sui::balance::{Self, Balance};
     use sui::tx_context::{Self, TxContext};
     use sui::dynamic_object_field as ofield;
-    use std::string::{Self, String};
+   
 
     const ENotEnough: u64 = 0;
     
@@ -32,11 +34,6 @@ module campaign_fund::campaign_fund {
         minimum_coins_limit: u64,
         platform_fees: u64,
         fees_wallet_address: address,
-    }
-
-    struct CampaignOwner has key {
-        id: UID,
-        fund_id: ID,
     }
 
     struct Campaign has key {
@@ -56,9 +53,9 @@ module campaign_fund::campaign_fund {
         start_date: u64,
         end_date: u64,
         timestamp: u64,
+        affiliates: Bag,
     }
 
-    //why store - dynamic filed b/w parent
     struct Affiliate has key, store{
         id: UID,
         click_counts: u64,
@@ -68,14 +65,15 @@ module campaign_fund::campaign_fund {
         wallet_address: address,
     }
 
-    struct AffiliateProfile has key{
-        id: UID,
-        participated_campagins_count: u64,
-        total_clicks: u64,
-        total_earnings: u64,
-        twitter_x: String,
-    }
+    // struct AffiliateProfile has key{
+    //     id: UID,
+    //     participated_campagins_count: u64,
+    //     total_clicks: u64,
+    //     total_earnings: u64,
+    //     twitter_x: String,
+    // }
 
+    //todo - Is it necessary
     struct Reciept has key {
         id: UID,
         company_name: String,
@@ -118,14 +116,13 @@ module campaign_fund::campaign_fund {
             campaign_config: &mut CampaignConfig,
             ctx: &mut TxContext
         ){
-        let fund_uid = object::new(ctx);
-        let id = object::uid_to_inner(&fund_uid);
         let coin_balance = coin::balance_mut(coin_address);
 
-        //todo - keep these below condition and division if possible in seperate module
         assert!(coins >= campaign_config.minimum_coins_limit, ENotEnough);
         
-        assert!(coins >= cost_per_click, ENotEnough); 
+        assert!(coins >= cost_per_click, ENotEnough);
+
+        assert!(end_date >= start_date, ENotEnough);
 
         let total_clicks = coins / cost_per_click;
 
@@ -134,7 +131,7 @@ module campaign_fund::campaign_fund {
         collect_fees(campaign_config, coin_address, ctx);
         
         let fundObject = Campaign{
-            id: fund_uid,
+            id: object::new(ctx),
             name: string::utf8(campaign_name),
             company_name: string::utf8(company_name),
             category: string::utf8(category),
@@ -150,11 +147,7 @@ module campaign_fund::campaign_fund {
             wallet_address,
             fees_wallet_address: campaign_config.fees_wallet_address,
             timestamp:  tx_context::epoch(ctx),
-        };
-
-        let fundOnwer = CampaignOwner{
-            id: object::new(ctx),
-            fund_id: id
+            affiliates: bag::new(ctx),
         };
 
         let reciept = Reciept{
@@ -166,66 +159,80 @@ module campaign_fund::campaign_fund {
         };
 
         transfer::share_object(fundObject);
-        transfer::transfer(fundOnwer, campaign_config.fees_wallet_address);
         //todo - make it immutable
-        transfer::transfer(reciept, tx_context::sender(ctx))
+        transfer::transfer(reciept, tx_context::sender(ctx));
     }
 
     //todo - here earning will be an number will increment according to the click_counts and initially both 0 and based on the increment fn these update
     // after that when withdraw loop they will pass into it
-    public entry fun create_affiliate(click_counts: u64, earnings: u64, campaign_url: vector<u8> , profile: address, wallet_address: address, campaign_config: &mut CampaignConfig ,ctx: &mut TxContext){
-        //add campaign url
-        //add their profile
+    public entry fun create_affiliate(
+            campaign: &mut Campaign, 
+            click_counts: u64, 
+            earnings: u64, 
+            campaign_url: vector<u8> , 
+            profile: address, 
+            wallet_address: address, 
+            ctx: &mut TxContext
+        ) : ID {
+        let affiliate_uid = object::new(ctx);
+        let affiliate_id = object::uid_to_inner(&affiliate_uid);
         let affiliatesObject = Affiliate{
-            id: object::new(ctx),
+            id: affiliate_uid,
             click_counts,
             earnings,
             campaign_url: string::utf8(campaign_url),
             profile,
             wallet_address: wallet_address,
         };
-        transfer::transfer(affiliatesObject, campaign_config.fees_wallet_address);
+        bag::add(&mut campaign.affiliates, affiliate_id  ,affiliatesObject);
+        affiliate_id
     }
 
     //todo -  whenever user connected wallet - check in web2 db - whether details there or not, if not then trigger these.
     //todo - during web2 signup or in db - check whether it has affiliate profile address, if not then call this function
-    public fun create_affiliate_profile(campaign_config: &mut CampaignConfig ,twitter_x: vector<u8>, ctx: &mut TxContext){
-        let profileObj = AffiliateProfile{
-            id: object::new(ctx),
-            participated_campagins_count:1,
-            total_clicks:0,
-            total_earnings:0,
-            twitter_x: string::utf8(twitter_x),
-        };
-        transfer::transfer(profileObj, campaign_config.fees_wallet_address);
-    }
+    // public fun create_affiliate_profile(campaign_config: &mut CampaignConfig ,twitter_x: vector<u8>, ctx: &mut TxContext){
+    //     let profileObj = AffiliateProfile{
+    //         id: object::new(ctx),
+    //         participated_campagins_count:1,
+    //         total_clicks:0,
+    //         total_earnings:0,
+    //         twitter_x: string::utf8(twitter_x),
+    //     };
+    //     transfer::transfer(profileObj, campaign_config.fees_wallet_address);
+    // }
 
-    public fun increment_affiliate_participate_count(profile: &mut AffiliateProfile){
-        profile.participated_campagins_count = profile.participated_campagins_count + 1;
-    }
+    // public fun increment_affiliate_participate_count(profile: &mut AffiliateProfile){
+    //     profile.participated_campagins_count = profile.participated_campagins_count + 1;
+    // }
 
     // restrict it - no one should not use it
-    public fun add_affiliate_to_campaign(fund: &mut Campaign, affiliate: Affiliate){
-        //todo - need to check whether company has campaignFund or not 
-        assert!(fund.wallet_address != affiliate.wallet_address, ENotEnough);
-        let affiliate_id = object::id(&affiliate);
-        ofield::add(&mut fund.id, affiliate_id, affiliate)
-    }
+    // public fun add_affiliate_to_campaign(fund: &mut Campaign, affiliate: Affiliate){
+    //     //todo - need to check whether company has campaignFund or not 
+    //     assert!(fund.wallet_address != affiliate.wallet_address, ENotEnough);
+    //     let affiliate_id = object::id(&affiliate);
+    //     ofield::add(&mut fund.id, affiliate_id, affiliate)
+    // }
+
+    // public fun update_affiliate(affiliate: &mut Affiliate, campaign: &mut Campaign, ){
+    //     affiliate.click_counts = affiliate.click_counts + 1;
+    //     affiliate.earnings = affiliate.earnings + 1;
+    // }
 
     //todo - convert into private
     //todo - get affiliate via parent instead of affiliate directly
-    public fun click_counter(campaign: &mut Campaign, affiliate: &mut Affiliate, profile :&mut AffiliateProfile, ctx: &mut TxContext){
-        affiliate.click_counts =  affiliate.click_counts + 1;
+    public fun mutate_affiliate_via_campaign<K: copy + drop + store>(campaign: &mut Campaign, affiliate_key: K, ctx: &mut TxContext){
+        let affiliate: &mut Affiliate = ofield::borrow_mut<K, Affiliate>(&mut campaign.id, affiliate_key);
+        affiliate.click_counts = affiliate.click_counts + 1;
         affiliate.earnings =  affiliate.earnings + campaign.cost_per_click;
         let cpc = campaign.cost_per_click;
-        increment_affiliate_profile_count(campaign, profile);
+        // increment_affiliate_profile_count(campaign, profile);
         withdraw_amount(campaign, cpc, affiliate.wallet_address, ctx)
     }
 
-    public fun increment_affiliate_profile_count(campaign: &mut Campaign, profile: &mut AffiliateProfile){
-        profile.total_clicks = profile.total_clicks + 1;
-        profile.total_earnings  = profile.total_earnings + campaign.cost_per_click;
-    }
+    // public fun increment_affiliate_profile_count(campaign: Campaign, profile: &mut AffiliateProfile){
+    //     profile.total_clicks = profile.total_clicks + 1;
+    //     profile.total_earnings  = profile.total_earnings + campaign.cost_per_click;
+    // }
 
     //todo - check end campaign
     public fun end_campaign(campaign: &mut Campaign, ctx: &mut TxContext ){
