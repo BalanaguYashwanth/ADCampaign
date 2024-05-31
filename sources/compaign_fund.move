@@ -16,6 +16,8 @@
 
 module campaign_fund::campaign_fund {
 
+    use std::vector;
+    // use std::debug;
     use sui::transfer;
     use sui::sui::SUI;
     use sui::vec_map::{Self, VecMap};
@@ -32,12 +34,6 @@ module campaign_fund::campaign_fund {
     const ONGOING : u64 = 2;
     const EXPIRED : u64 = 3;
 
-    struct CampaignConfig has key{
-        id: UID,
-        minimum_coins_limit: u64,
-        platform_fees: u64,
-        fees_wallet_address: address,
-    }
 
     struct AffiliateHistory has store {
         company_name: String,
@@ -46,14 +42,29 @@ module campaign_fund::campaign_fund {
         earnings: u64,
     }
 
+    struct CampaignConfig has key{
+        id: UID,
+        minimum_coins_limit: u64,
+        platform_fees_percent: u64,
+        fees_wallet_address: address,
+    }
+
+    struct Fan has key, store{
+        id: UID,
+        donated: u64,
+        message: String,
+        wallet_address: address,
+        timestamp: u64,
+    }
+
     struct Campaign has key {
         id: UID,
         share_id: ID,
-        name: String,
         company_name: String,
         category: String,
         original_url: String,
         total_clicks: u64,
+        remaining_clicks: u64,
         cost_per_click: u64,
         budget: u64,
         distribute_funds: Balance<SUI>,
@@ -62,6 +73,7 @@ module campaign_fund::campaign_fund {
         status: u64,
         start_date: u64,
         end_date: u64,
+        supporters: vector<Fan>,
         timestamp: u64,
         affiliates: VecMap<ID, Affiliate>,
     }
@@ -72,6 +84,7 @@ module campaign_fund::campaign_fund {
         earnings: u64,
         campaign_url: String,
         wallet_address: address,
+        timestamp: u64,
     }
 
     struct AffiliateProfile has key{
@@ -80,33 +93,39 @@ module campaign_fund::campaign_fund {
         participated_campagins_count: u64,
         total_clicks: u64,
         total_earnings: u64,
-        twitter_x: String,
-        history: VecMap<ID, AffiliateHistory>
+        history: VecMap<ID, AffiliateHistory>,
+        timestamp: u64,
     }
 
     //todo - Is it necessary
     struct Reciept has key {
         id: UID,
         company_name: String,
-        campaign_name: String,
-        campaign_budget: u64,
+        budget: u64,
         timestamp: u64,
     }
 
-    public fun campaign_config(minimum_coins_limit: u64, platform_fees: u64, fees_wallet_address: address, ctx: &mut TxContext){
+    public fun get_epoch_seconds(ctx: &TxContext): u64 {
+        let current_epoch_ms = tx_context::epoch_timestamp_ms(ctx);
+        let current_epoch_s = current_epoch_ms/1000;
+        current_epoch_s
+    }
+
+    public fun campaign_config(minimum_coins_limit: u64, platform_fees_percent: u64, fees_wallet_address: address, ctx: &mut TxContext){
         let campaignLimitObject = CampaignConfig{
             id: object::new(ctx),
             minimum_coins_limit,
-            platform_fees,
+            platform_fees_percent,
             fees_wallet_address,
         };
         transfer::share_object(campaignLimitObject)
     }
 
     //todo - keep transfer instead of public transfer, check transfer more details
-    public fun collect_fees(campaign_config: &mut CampaignConfig, coin_address: &mut Coin<SUI>, ctx: &mut TxContext){
+    public fun collect_fees(campaign_config: &mut CampaignConfig, coin_address: &mut Coin<SUI>, coins: u64,  ctx: &mut TxContext){
         let coin_balance = coin::balance_mut(coin_address);
-        let amount = coin::take(coin_balance, campaign_config.platform_fees , ctx);
+        let fees = (coins * campaign_config.platform_fees_percent) / 100;
+        let amount = coin::take(coin_balance, fees , ctx);
         transfer::public_transfer(amount, campaign_config.fees_wallet_address)
     }
 
@@ -114,7 +133,6 @@ module campaign_fund::campaign_fund {
     // start date & end date will be epoch
     public entry fun create_campaign(
             campaign_config: &mut CampaignConfig,
-            campaign_name: vector<u8>,
             company_name: vector<u8>,
             category: vector<u8>,
             original_url: vector<u8>,
@@ -139,7 +157,7 @@ module campaign_fund::campaign_fund {
 
         let pay = balance::split(coin_balance, coins);
 
-        collect_fees(campaign_config, coin_address, ctx);
+        collect_fees(campaign_config, coin_address, coins, ctx);
 
         let uid = object::new(ctx);
         let share_id = object::uid_to_inner(&uid);
@@ -147,7 +165,6 @@ module campaign_fund::campaign_fund {
         let campaignObject = Campaign{
             id: uid,
             share_id,
-            name: string::utf8(campaign_name),
             company_name: string::utf8(company_name),
             category: string::utf8(category),
             original_url: string::utf8(original_url),
@@ -155,26 +172,60 @@ module campaign_fund::campaign_fund {
             budget : coins,
             distribute_funds:  pay,
             total_clicks,
+            remaining_clicks: total_clicks,
             start_date,
             end_date,
             status,
             wallet_address,
             fees_wallet_address: campaign_config.fees_wallet_address,
-            timestamp:  tx_context::epoch(ctx),
+            supporters: vector::empty<Fan>(),
+            timestamp:  get_epoch_seconds(ctx),
             affiliates: vec_map::empty(),
         };
 
         let reciept = Reciept{
             id: object::new(ctx),
             company_name: string::utf8(company_name),
-            campaign_name: string::utf8(campaign_name),
-            campaign_budget: coins,
-            timestamp:  tx_context::epoch(ctx),
+            budget: coins,
+            timestamp:  get_epoch_seconds(ctx),
         };
 
         transfer::share_object(campaignObject);
         //todo - make it immutable
         transfer::transfer(reciept, tx_context::sender(ctx))
+    }
+
+    //todo - minum pool can add it should be more than cpc
+    public fun update_campaign_pool(
+            campaign_config: &mut CampaignConfig, 
+            campaign: &mut Campaign, 
+            message: vector<u8>, 
+            coins: u64, 
+            coin_address: &mut Coin<SUI>, 
+            ctx: &mut TxContext
+        ) {
+            
+        assert!(campaign.status == ONGOING, ENotMatch);
+
+        let coin_balance = coin::balance_mut(coin_address);
+        let pay = balance::split(coin_balance, coins);
+
+        collect_fees(campaign_config, coin_address, coins , ctx);
+
+        balance::join(&mut campaign.distribute_funds, pay);
+        campaign.budget = campaign.budget + coins;
+        campaign.total_clicks = campaign.total_clicks + (coins/campaign.cost_per_click);
+        campaign.remaining_clicks = campaign.remaining_clicks +  (coins/campaign.cost_per_click);
+
+        let fan_object = Fan{
+            id: object::new(ctx),
+            donated: coins,
+            message: string::utf8(message),
+            wallet_address: tx_context::sender(ctx),
+            timestamp: get_epoch_seconds(ctx),
+        };
+
+        vector::push_back(&mut campaign.supporters, fan_object);
     }
 
     //todo -  whenever user connected wallet - check in web2 db - whether details there or not, if not then trigger these.
@@ -183,7 +234,6 @@ module campaign_fund::campaign_fund {
             campaign_config: &mut CampaignConfig,
             campaign: &mut Campaign,
             campaign_url: vector<u8>,
-            twitter_x: vector<u8>,
             ctx: &mut TxContext
         ) {
         let history_map = vec_map::empty<ID, AffiliateHistory>();
@@ -207,8 +257,8 @@ module campaign_fund::campaign_fund {
             participated_campagins_count:1,
             total_clicks:0,
             total_earnings:0,
-            twitter_x: string::utf8(twitter_x),
             history: history_map,
+            timestamp: get_epoch_seconds(ctx),
         };
         
         transfer::transfer(profileObj, campaign_config.fees_wallet_address);
@@ -217,7 +267,7 @@ module campaign_fund::campaign_fund {
     public fun update_affiliate_profile(campaign: &mut Campaign, campaign_url: vector<u8> ,profile: &mut AffiliateProfile){
         let affiliateHistoryObject = AffiliateHistory{
             company_name: campaign.company_name,
-             campaign_url: string::utf8(campaign_url),
+            campaign_url: string::utf8(campaign_url),
             clicks: 0,
             earnings: 0
         };
@@ -231,11 +281,9 @@ module campaign_fund::campaign_fund {
             campaign: &mut Campaign,
             campaign_url: vector<u8>,
             profile: &mut AffiliateProfile,
-            wallet_address: address, 
+            wallet_address: address,
             ctx: &mut TxContext
         ) {
-        
-        assert!(campaign.wallet_address != wallet_address, ENotMatch);
 
         assert!(campaign.status == ONGOING, ENotMatch);
 
@@ -246,6 +294,7 @@ module campaign_fund::campaign_fund {
             earnings:0,
             campaign_url: string::utf8(campaign_url),
             wallet_address: wallet_address,
+            timestamp: get_epoch_seconds(ctx),
         };
         vec_map::insert(&mut campaign.affiliates, profile.share_id, affiliatesObject);
     }
@@ -274,20 +323,28 @@ module campaign_fund::campaign_fund {
         let affiliate = vec_map::get_mut(&mut campaign.affiliates, &profile.share_id);
         affiliate.click_counts = affiliate.click_counts + 1;
         affiliate.earnings =  affiliate.earnings + campaign.cost_per_click;
+        campaign.remaining_clicks  = campaign.remaining_clicks - 1;
         let cpc = campaign.cost_per_click;
         increment_affiliate_profile(&campaign.share_id, cpc, profile);
         withdraw_amount(campaign, cpc, affiliate.wallet_address, ctx);
     }
 
     //todo - check end campaign
-    public fun end_campaign(campaign: &mut Campaign, ctx: &mut TxContext ){
+    public fun end_campaign(campaign_config: &mut CampaignConfig, campaign: &mut Campaign, ctx: &mut TxContext ){
 
+        let current_epoch = get_epoch_seconds(ctx);
+    
         let sender_address = tx_context::sender(ctx);
 
-        assert!(campaign.wallet_address == sender_address, ENotMatch);
+        assert!(current_epoch >= campaign.end_date, ENotEnough);
+
+        assert!( sender_address == campaign.wallet_address || sender_address == campaign_config.fees_wallet_address, ENotMatch);
 
         campaign.status = EXPIRED;
         let total_balance = balance::value(&campaign.distribute_funds);
+
+        assert!(total_balance > 0, ENotEnough);
+
         //todo - change value
         let amount = coin::take(&mut campaign.distribute_funds, total_balance, ctx);
         transfer::public_transfer(amount, campaign.wallet_address);
