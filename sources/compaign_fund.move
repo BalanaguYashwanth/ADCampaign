@@ -68,7 +68,6 @@ module campaign_fund::campaign_fund {
         total_clicks: u64,
         remaining_clicks: u64,
         cost_per_click: u64,
-        budget: u64,
         distribute_funds: Balance<SUI>,
         wallet_address: address,
         status: u64,
@@ -137,8 +136,7 @@ module campaign_fund::campaign_fund {
             company_name: vector<u8>,
             category: vector<u8>,
             original_url: vector<u8>,
-            coin_address: &mut Coin<SUI>,
-            coins: u64,
+            coin: Coin<SUI>,
             cost_per_click: u64,
             start_date: u64,
             end_date: u64,
@@ -146,19 +144,15 @@ module campaign_fund::campaign_fund {
             wallet_address: address,
             ctx: &mut TxContext
         ){
-        let coin_balance = coin::balance_mut(coin_address);
-
-        assert!(coins >= campaign_config.minimum_coins_limit, ENotEnough);
+        assert!(coin::value(&coin) >= campaign_config.minimum_coins_limit, ENotEnough);
         
-        assert!(coins >= cost_per_click, ENotEnough);
+        assert!(coin::value(&coin) >= cost_per_click, ENotEnough);
 
         assert!(end_date >= start_date, ENotEnough);
 
-        let total_clicks = coins / cost_per_click;
+        let total_clicks = coin::value(&coin) / cost_per_click;
 
-        let pay = balance::split(coin_balance, coins);
-
-        collect_fees(campaign_config, coin_address, coins, ctx);
+        let coin_value = coin::value(&coin);
 
         let uid = object::new(ctx);
         let share_id = object::uid_to_inner(&uid);
@@ -170,8 +164,7 @@ module campaign_fund::campaign_fund {
             category: string::utf8(category),
             original_url: string::utf8(original_url),
             cost_per_click: cost_per_click,
-            budget : coins,
-            distribute_funds:  pay,
+            distribute_funds:  coin::into_balance(coin),
             total_clicks,
             remaining_clicks: total_clicks,
             start_date,
@@ -186,7 +179,7 @@ module campaign_fund::campaign_fund {
         let reciept = Reciept{
             id: object::new(ctx),
             company_name: string::utf8(company_name),
-            budget: coins,
+            budget: coin_value,
             timestamp:  get_epoch_seconds(ctx),
         };
 
@@ -213,7 +206,6 @@ module campaign_fund::campaign_fund {
         collect_fees(campaign_config, coin_address, coins , ctx);
 
         balance::join(&mut campaign.distribute_funds, pay);
-        campaign.budget = campaign.budget + coins;
         campaign.total_clicks = campaign.total_clicks + (coins/campaign.cost_per_click);
         campaign.remaining_clicks = campaign.remaining_clicks +  (coins/campaign.cost_per_click);
 
